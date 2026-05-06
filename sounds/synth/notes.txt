@@ -1,0 +1,10 @@
+1.wav  — Do  (C3)  130.81 Hz
+2.wav  — Re  (D3)  146.83 Hz
+3.wav  — Mi  (E3)  164.81 Hz
+4.wav  — Fa  (F3)  174.61 Hz
+5.wav  — Sol (G3)  196.00 Hz
+6.wav  — La  (A3)  220.00 Hz
+7.wav  — Si  (B3)  246.94 Hz
+8.wav  — Do  (C4)  261.63 Hz
+9.wav  — Re  (D4)  293.66 Hz
+10.wav — Mi  (E4)  329.63 Hz
