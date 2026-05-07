@@ -162,6 +162,12 @@ function pump(): void {
   }
 }
 
+// Force pw-cat to exit and let the on-exit handler respawn it. Used by the
+// BT watchdog to relink to a freshly-reconnected Bluetooth sink.
+export function restartMixer(): void {
+  if (proc) proc.kill("SIGTERM");
+}
+
 export function shutdownMixer(): void {
   if (proc) {
     proc.removeAllListeners("exit");

@@ -2,6 +2,7 @@ import { listArduinoPorts, connect } from "./serial";
 import { log } from "./logger";
 import { cycleMode, initSoundChannels, listModes, playSound } from "./sound";
 import { isDemoActive, startDemo, stopDemo } from "./demo";
+import { startBtWatchdog } from "./bt-watchdog";
 
 const TOTAL_SENSORS = 10;
 const DEFAULT_MODE = "pian";
@@ -132,6 +133,7 @@ async function main() {
   await scanForBoards();
   setInterval(scanForBoards, SCAN_INTERVAL_MS);
   setInterval(checkIdle, IDLE_CHECK_MS);
+  startBtWatchdog();
   startDemo();
 }
 
