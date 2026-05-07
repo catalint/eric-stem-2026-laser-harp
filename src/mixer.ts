@@ -129,19 +129,6 @@ export function loadSample(key: string, wavPath: string): void {
   samples.set(key, { pcm, frames: pcm.length / CHANNELS });
 }
 
-export function hasSample(key: string): boolean {
-  return samples.has(key);
-}
-
-export function getSampleDurationMs(key: string): number {
-  const s = samples.get(key);
-  return s ? (s.frames / RATE) * 1000 : 0;
-}
-
-export function clearSamples(): void {
-  samples.clear();
-}
-
 export function playSample(key: string): void {
   const sample = samples.get(key);
   if (!sample) return;
@@ -154,14 +141,6 @@ export function playSample(key: string): void {
     }
   }
   voices.push({ sample, pos: 0, key, fading: false, fadePos: 0 });
-}
-
-// Fade out every currently-playing voice. Used by the demo to cut off long
-// orchestrated tracks the moment a real beam interrupt arrives.
-export function stopAllVoices(): void {
-  for (const v of voices) {
-    if (!v.fading) { v.fading = true; v.fadePos = 0; }
-  }
 }
 
 function renderChunk(): Buffer {
@@ -219,14 +198,4 @@ function pump(): void {
 // BT watchdog to relink to a freshly-reconnected Bluetooth sink.
 export function restartMixer(): void {
   if (proc) proc.kill("SIGTERM");
-}
-
-export function shutdownMixer(): void {
-  if (heartbeat) { clearInterval(heartbeat); heartbeat = null; }
-  if (proc) {
-    proc.removeAllListeners("exit");
-    proc.stdin.end();
-    proc.kill("SIGTERM");
-    proc = null;
-  }
 }

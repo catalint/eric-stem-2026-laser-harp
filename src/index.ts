@@ -1,7 +1,6 @@
 import { listArduinoPorts, connect } from "./serial";
 import { log } from "./logger";
 import { cycleMode, initSoundChannels, listModes, playSound } from "./sound";
-import { isDemoActive, startDemo, stopDemo } from "./demo";
 import { startBtWatchdog } from "./bt-watchdog";
 import { markShuttingDown } from "./mixer";
 
@@ -17,8 +16,6 @@ process.on("exit", () => markShuttingDown());
 const TOTAL_SENSORS = 10;
 const DEFAULT_MODE = "pian";
 const SCAN_INTERVAL_MS = 2000;
-const IDLE_MS = 60_000;
-const IDLE_CHECK_MS = 5_000;
 // Holding sensors 1 and 10 together cycles to the next mode — a way to
 // switch sounds without a keyboard. Latches until one beam is restored.
 const CHORD_CYCLE_SENSORS: [number, number] = [1, TOTAL_SENSORS];
@@ -26,7 +23,6 @@ const CHORD_CYCLE_SENSORS: [number, number] = [1, TOTAL_SENSORS];
 const connected = new Set<string>();
 const heldSensors = new Set<number>();
 let chordTriggered = false;
-let lastInteractionAt = Date.now();
 
 function attachBoard(portPath: string) {
   console.log(`Connecting to Arduino on ${portPath}...`);
@@ -54,8 +50,6 @@ function attachBoard(portPath: string) {
           break;
         case "interrupted":
           log(`[${ts}] [${label}] SENSOR ${event.sensor} INTERRUPTED (value: ${event.value})`);
-          lastInteractionAt = Date.now();
-          if (isDemoActive()) stopDemo();
           playSound(event.sensor);
           heldSensors.add(event.sensor);
           if (
@@ -130,21 +124,14 @@ function attachKeyboard() {
   console.log(`Modes: ${listModes().join(", ")}. Press 'm' to cycle, 'q' to quit.`);
 }
 
-function checkIdle() {
-  if (isDemoActive()) return;
-  if (Date.now() - lastInteractionAt >= IDLE_MS) startDemo();
-}
-
 async function main() {
   initSoundChannels(TOTAL_SENSORS, DEFAULT_MODE);
   attachKeyboard();
 
-  console.log(`Watching for Arduinos every ${SCAN_INTERVAL_MS}ms; demo on startup, resumes after ${IDLE_MS / 1000}s idle.`);
+  console.log(`Watching for Arduinos every ${SCAN_INTERVAL_MS}ms.`);
   await scanForBoards();
   setInterval(scanForBoards, SCAN_INTERVAL_MS);
-  setInterval(checkIdle, IDLE_CHECK_MS);
   startBtWatchdog();
-  startDemo();
 }
 
 main().catch(console.error);

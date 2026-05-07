@@ -2,15 +2,7 @@ import { ChildProcessWithoutNullStreams, spawn, spawnSync } from "child_process"
 import { existsSync, mkdirSync, readdirSync, statSync } from "fs";
 import { resolve } from "path";
 import ffmpegPath from "ffmpeg-static";
-import {
-  clearSamples,
-  getSampleDurationMs,
-  hasSample,
-  loadSample,
-  playSample,
-  startMixer,
-  stopAllVoices,
-} from "./mixer";
+import { loadSample, playSample, startMixer } from "./mixer";
 
 const isWindows = process.platform === "win32";
 const daemonScript = resolve(__dirname, "..", "scripts", "sound-daemon.ps1");
@@ -137,8 +129,8 @@ export function initSoundChannels(numSensors: number, defaultMode: string) {
     }
   } else {
     startMixer();
-    // Pre-load every mode's samples under "<modeName>:<sensor>" so the demo
-    // can mix sounds from multiple modes simultaneously.
+    // Pre-load every mode's samples so cycleMode is instant — no file I/O on
+    // a mode switch. Keys are "<modeName>:<sensor>".
     for (const [modeName, m] of modes) {
       for (const [sensor, path] of m.paths) {
         loadSample(`${modeName}:${sensor}`, path);
@@ -191,36 +183,4 @@ export function playSound(sensor: number) {
   } else if (currentMode) {
     playSample(`${currentMode.name}:${sensor}`);
   }
-}
-
-// Demo-only: play a specific mode's sample regardless of currentMode.
-export function playSoundFromMode(modeName: string, sensor: number) {
-  if (isWindows) return;
-  playSample(`${modeName}:${sensor}`);
-}
-
-// Demo-only: load and play a long pre-rendered audio track (e.g. a full
-// orchestrated MIDI render). Uses key prefix "demo:" so it can't collide.
-export function loadDemoTrack(name: string, wavPath: string) {
-  if (isWindows) return;
-  loadSample(`demo:${name}`, wavPath);
-}
-
-export function playDemoTrack(name: string) {
-  if (isWindows) return;
-  playSample(`demo:${name}`);
-}
-
-export function hasDemoTrack(name: string): boolean {
-  return !isWindows && hasSample(`demo:${name}`);
-}
-
-export function getDemoTrackMs(name: string): number {
-  return isWindows ? 0 : getSampleDurationMs(`demo:${name}`);
-}
-
-// Stop every voice currently mixing (used when the demo gets interrupted).
-export function stopAllPlayingSounds() {
-  if (isWindows) return;
-  stopAllVoices();
 }
