@@ -46,8 +46,13 @@ function parseWav(buf: Buffer): Int16Array {
   throw new Error("no data chunk in WAV");
 }
 
+let shuttingDown = false;
+let writesSinceLastDrain = 0;
+let totalBytesWritten = 0;
+
 export function startMixer(): void {
-  if (proc) return;
+  if (proc || shuttingDown) return;
+  console.log("[mixer] spawning pw-cat");
   const child = spawn(
     "pw-cat",
     [
@@ -63,17 +68,44 @@ export function startMixer(): void {
     { stdio: ["pipe", "ignore", "pipe"] },
   ) as MixerProc;
   proc = child;
+  totalBytesWritten = 0;
+  writesSinceLastDrain = 0;
   child.stderr.on("data", (b: Buffer) => {
-    process.stderr.write(`[mixer] ${b}`);
+    process.stderr.write(`[mixer/pw-cat] ${b}`);
   });
-  child.stdin.on("drain", pump);
-  child.on("exit", (code) => {
-    console.error(`[mixer] pw-cat exited (code ${code}); restarting in 1s`);
+  child.stdin.on("drain", () => {
+    console.log(`[mixer] drain (writes since last: ${writesSinceLastDrain}, total bytes: ${totalBytesWritten})`);
+    writesSinceLastDrain = 0;
+    pump();
+  });
+  child.stdin.on("error", (e) => {
+    console.error(`[mixer] stdin error: ${e.message}`);
+  });
+  child.on("exit", (code, signal) => {
+    console.error(`[mixer] pw-cat exited (code=${code} signal=${signal}); shuttingDown=${shuttingDown}`);
     proc = null;
-    setTimeout(startMixer, 1000);
+    if (!shuttingDown) setTimeout(startMixer, 1000);
   });
   // Prime the pipeline.
   pump();
+  // Heartbeat: if pw-cat ever wedges (no drain for a while), log it so we
+  // can see in journalctl how often it's happening.
+  setInterval(() => {
+    if (!proc?.stdin) return;
+    console.log(`[mixer] heartbeat: writableLength=${proc.stdin.writableLength}, totalBytes=${totalBytesWritten}, writesSince=${writesSinceLastDrain}`);
+  }, 60_000).unref();
+}
+
+// Stop the auto-respawn cycle. Call this from a process-exit handler so a
+// killed parent doesn't leave a zombie pw-cat respawning forever.
+export function markShuttingDown(): void {
+  shuttingDown = true;
+  if (proc) {
+    proc.removeAllListeners("exit");
+    try { proc.stdin.end(); } catch {}
+    proc.kill("SIGTERM");
+    proc = null;
+  }
 }
 
 export function loadSample(key: string, wavPath: string): void {
@@ -154,11 +186,15 @@ function renderChunk(): Buffer {
 
 function pump(): void {
   if (!proc?.stdin || proc.stdin.destroyed) return;
-  // Keep ~1.5 s of audio buffered ahead. We ignore write()'s false return
-  // (Node's default 16 KB highWaterMark is way too small for our needs);
-  // 'drain' fires once below HWM and we refill back to the target.
-  while (proc.stdin.writableLength < TARGET_QUEUE_BYTES) {
-    proc.stdin.write(renderChunk());
+  // Honor write()'s return: it returns false once the OS pipe / Node buffer
+  // can't accept more right now, and 'drain' will fire when room re-opens.
+  // Without honoring it we'd write into the void and never receive drains.
+  while (true) {
+    const chunk = renderChunk();
+    const ok = proc.stdin.write(chunk);
+    totalBytesWritten += chunk.length;
+    writesSinceLastDrain++;
+    if (!ok) return; // backpressure — wait for drain
   }
 }
 

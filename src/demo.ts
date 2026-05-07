@@ -74,9 +74,11 @@ function schedule(fn: () => void, ms: number): void {
 function runRobotsIntro(sensor: number): void {
   if (!active) return;
   if (sensor >= 10) {
+    console.log(`[demo] robots intro done`);
     schedule(() => runStarwars(0), PAUSE_AFTER_INTRO_MS);
     return;
   }
+  console.log(`[demo] robots[${sensor + 1}]`);
   playSoundFromMode("robots", sensor + 1);
   schedule(() => runRobotsIntro(sensor + 1), ROBOTS_INTRO_GAP_MS);
 }

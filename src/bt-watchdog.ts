@@ -29,32 +29,63 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 type Suspect = { address: string; sinkName: string };
 
+// Track consecutive bad checks per sink so a single transient blip doesn't
+// trigger an unnecessary recovery cycle.
+const consecutiveBad = new Map<string, number>();
+const BAD_STREAK_THRESHOLD = 2;
+
+type PwNode = { info?: { state?: string; props?: Record<string, string> } };
+
 async function findSilentBtSink(): Promise<Suspect | null> {
   const { code, stdout } = await run("pw-dump", []);
   if (code !== 0) return null;
-  let dump: unknown;
+  let dump: PwNode[];
   try { dump = JSON.parse(stdout); } catch { return null; }
   if (!Array.isArray(dump)) return null;
 
+  // Is our pw-cat stream healthy? If the stream is "running", audio is flowing
+  // regardless of what api.bluez5.transport says (that property is unreliable).
+  const ourStream = dump.find((n) =>
+    n?.info?.props?.["media.class"] === "Stream/Output/Audio" &&
+    n?.info?.props?.["application.name"] === "pw-cat",
+  );
+  const streamState = ourStream?.info?.state ?? "missing";
+  const streamBad = streamState !== "running";
+
   for (const node of dump) {
-    const props = (node as { info?: { props?: Record<string, string> } })?.info?.props;
+    const props = node?.info?.props;
     if (!props) continue;
     if (props["media.class"] !== "Audio/Sink") continue;
     if (props["device.api"] !== "bluez5") continue;
 
-    const transport = props["api.bluez5.transport"];
+    const sinkState = node.info?.state ?? "missing";
     const address = props["api.bluez5.address"];
     const sinkName = props["node.name"] ?? "";
     if (!address) continue;
 
-    if (transport && transport !== "") continue; // healthy
+    // Healthy when sink is running or idle (idle just means no audio right
+    // now; the moment data arrives it will go to running). Only suspended
+    // or error are pathological while we expect to be feeding it.
+    const sinkBad = sinkState === "suspended" || sinkState === "error";
+    if (!sinkBad || !streamBad) {
+      consecutiveBad.delete(address);
+      continue;
+    }
 
-    // BlueZ has to still consider the device connected, otherwise the
-    // user just turned the headset off and we should leave it alone.
+    // BlueZ has to still consider the device connected, otherwise the user
+    // just turned the headset off and we should leave it alone.
     const info = await run("bluetoothctl", ["info", address]);
     if (info.code !== 0) continue;
-    if (!/Connected:\s+yes/i.test(info.stdout)) continue;
+    if (!/Connected:\s+yes/i.test(info.stdout)) {
+      consecutiveBad.delete(address);
+      continue;
+    }
 
+    const streak = (consecutiveBad.get(address) ?? 0) + 1;
+    consecutiveBad.set(address, streak);
+    if (streak < BAD_STREAK_THRESHOLD) continue;
+
+    consecutiveBad.delete(address);
     return { address, sinkName };
   }
   return null;

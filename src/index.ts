@@ -3,6 +3,16 @@ import { log } from "./logger";
 import { cycleMode, initSoundChannels, listModes, playSound } from "./sound";
 import { isDemoActive, startDemo, stopDemo } from "./demo";
 import { startBtWatchdog } from "./bt-watchdog";
+import { markShuttingDown } from "./mixer";
+
+for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
+  process.on(sig, () => {
+    console.log(`[main] caught ${sig}, shutting down cleanly`);
+    markShuttingDown();
+    process.exit(0);
+  });
+}
+process.on("exit", () => markShuttingDown());
 
 const TOTAL_SENSORS = 10;
 const DEFAULT_MODE = "pian";
