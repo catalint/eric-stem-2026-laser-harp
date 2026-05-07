@@ -11,6 +11,7 @@ yarn-error.log*
 .vscode/*
 
 /sounds/.converted
+/sounds/.demo-rendered
 /build
 /dist
 laser.log

@@ -19,7 +19,7 @@ Arduino #2 (sensors 6-10) ─┘
 
 - **Beam polarity**: receiver outputs `HIGH` when the beam is *interrupted* (blocked), `LOW` when seen. Don't invert this without re-checking the modules.
 - **`hello` event** sets the per-board `[from,to]` range so log lines say which board reported. The board doesn't know its own offset at runtime — only the compiled-in `SENSOR_OFFSET`.
-- **Sound daemon is Windows-only right now**: `scripts/sound-daemon.ps1` uses `System.Media.SoundPlayer`. One PowerShell child per sensor, fed `play` / `load <path>` over stdin. Moving the host to Linux (Pi) will require a Linux equivalent (`aplay`, `paplay`, `mpv --idle`, etc.).
+- **Sound paths differ by platform.** Windows: `scripts/sound-daemon.ps1` (one PowerShell `System.Media.SoundPlayer` per sensor, fed `play` / `load <path>` over stdin). Linux: `src/mixer.ts` runs a single long-lived `pw-cat --playback --raw` process; samples are loaded into memory and mixed in JS each 10 ms tick with per-voice fade-in/out so retriggers and end-of-sample don't click. `src/sound.ts` branches on `process.platform`. Linux audio follows the default PipeWire sink (e.g. Bluetooth headphones) without needing `ALSA_CARD`.
 - **Audio warmup** in the daemon plays 50ms of silence on startup so the first real `play` isn't laggy from cold-init of the Windows audio stack.
 
 ## Run

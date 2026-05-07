@@ -1,9 +1,21 @@
-import { findArduinos, connect } from "./serial";
+import { listArduinoPorts, connect } from "./serial";
 import { log } from "./logger";
 import { cycleMode, initSoundChannels, listModes, playSound } from "./sound";
+import { isDemoActive, startDemo, stopDemo } from "./demo";
 
 const TOTAL_SENSORS = 10;
 const DEFAULT_MODE = "pian";
+const SCAN_INTERVAL_MS = 2000;
+const IDLE_MS = 60_000;
+const IDLE_CHECK_MS = 5_000;
+// Holding sensors 1 and 10 together cycles to the next mode — a way to
+// switch sounds without a keyboard. Latches until one beam is restored.
+const CHORD_CYCLE_SENSORS: [number, number] = [1, TOTAL_SENSORS];
+
+const connected = new Set<string>();
+const heldSensors = new Set<number>();
+let chordTriggered = false;
+let lastInteractionAt = Date.now();
 
 function attachBoard(portPath: string) {
   console.log(`Connecting to Arduino on ${portPath}...`);
@@ -31,10 +43,30 @@ function attachBoard(portPath: string) {
           break;
         case "interrupted":
           log(`[${ts}] [${label}] SENSOR ${event.sensor} INTERRUPTED (value: ${event.value})`);
+          lastInteractionAt = Date.now();
+          if (isDemoActive()) stopDemo();
           playSound(event.sensor);
+          heldSensors.add(event.sensor);
+          if (
+            !chordTriggered &&
+            heldSensors.has(CHORD_CYCLE_SENSORS[0]) &&
+            heldSensors.has(CHORD_CYCLE_SENSORS[1])
+          ) {
+            chordTriggered = true;
+            const next = cycleMode();
+            console.log(`[chord 1+10] mode -> ${next ?? "(none)"}`);
+          }
           break;
         case "restored":
           log(`[${ts}] [${label}] Sensor ${event.sensor} restored (value: ${event.value})`);
+          heldSensors.delete(event.sensor);
+          if (
+            chordTriggered &&
+            (!heldSensors.has(CHORD_CYCLE_SENSORS[0]) ||
+              !heldSensors.has(CHORD_CYCLE_SENSORS[1]))
+          ) {
+            chordTriggered = false;
+          }
           break;
         case "debug":
           log(`[${ts}] [${label}] sensors: ${event.values.join(" | ")}`, false);
@@ -53,7 +85,23 @@ function attachBoard(portPath: string) {
 
   port.on("close", () => {
     console.log(`[${label}] Serial port closed.`);
+    connected.delete(portPath);
   });
+}
+
+async function scanForBoards() {
+  let found: string[];
+  try {
+    found = await listArduinoPorts();
+  } catch (err) {
+    console.error("Port scan failed:", (err as Error).message);
+    return;
+  }
+  for (const p of found) {
+    if (connected.has(p)) continue;
+    connected.add(p);
+    attachBoard(p);
+  }
 }
 
 function attachKeyboard() {
@@ -71,17 +119,20 @@ function attachKeyboard() {
   console.log(`Modes: ${listModes().join(", ")}. Press 'm' to cycle, 'q' to quit.`);
 }
 
+function checkIdle() {
+  if (isDemoActive()) return;
+  if (Date.now() - lastInteractionAt >= IDLE_MS) startDemo();
+}
+
 async function main() {
   initSoundChannels(TOTAL_SENSORS, DEFAULT_MODE);
-
-  const portPaths = await findArduinos();
-  console.log(`Found ${portPaths.length} Arduino(s): ${portPaths.join(", ")}`);
-
-  for (const p of portPaths) {
-    attachBoard(p);
-  }
-
   attachKeyboard();
+
+  console.log(`Watching for Arduinos every ${SCAN_INTERVAL_MS}ms; demo on startup, resumes after ${IDLE_MS / 1000}s idle.`);
+  await scanForBoards();
+  setInterval(scanForBoards, SCAN_INTERVAL_MS);
+  setInterval(checkIdle, IDLE_CHECK_MS);
+  startDemo();
 }
 
 main().catch(console.error);

@@ -45,7 +45,8 @@
       "WebFetch(domain:robocraze.com)",
       "WebFetch(domain:sigmanortec.ro)",
       "Bash(arduino-cli board *)",
-      "PowerShell(Get-Process *)"
+      "PowerShell(Get-Process *)",
+      "Bash(npm --version)"
     ]
   }
 }

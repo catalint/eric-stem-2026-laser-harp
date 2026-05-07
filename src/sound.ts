@@ -2,7 +2,17 @@ import { ChildProcessWithoutNullStreams, spawn, spawnSync } from "child_process"
 import { existsSync, mkdirSync, readdirSync, statSync } from "fs";
 import { resolve } from "path";
 import ffmpegPath from "ffmpeg-static";
+import {
+  clearSamples,
+  getSampleDurationMs,
+  hasSample,
+  loadSample,
+  playSample,
+  startMixer,
+  stopAllVoices,
+} from "./mixer";
 
+const isWindows = process.platform === "win32";
 const daemonScript = resolve(__dirname, "..", "scripts", "sound-daemon.ps1");
 const soundsDir = resolve(__dirname, "..", "sounds");
 const cacheDir = resolve(soundsDir, ".converted");
@@ -33,8 +43,10 @@ function ensureWav(srcPath: string, modeName: string, sensor: number): string {
       "-y",
       "-i", srcPath,
       "-acodec", "pcm_s16le",
-      "-ar", "44100",
+      "-ar", "48000",
       "-ac", "2",
+      // Strip any leading silence so trigger latency tracks the pipe, not the file.
+      "-af", "silenceremove=start_periods=1:start_silence=0:start_threshold=-55dB",
       "-hide_banner", "-loglevel", "error",
       dst,
     ],
@@ -118,9 +130,20 @@ export function initSoundChannels(numSensors: number, defaultMode: string) {
   currentMode = mode;
   console.log(`Mode: ${mode.name}`);
 
-  for (let i = 1; i <= numSensors; i++) {
-    const path = mode.paths.get(i);
-    if (path) channels.set(i, spawnChannel(i, path));
+  if (isWindows) {
+    for (let i = 1; i <= numSensors; i++) {
+      const path = mode.paths.get(i);
+      if (path) channels.set(i, spawnChannel(i, path));
+    }
+  } else {
+    startMixer();
+    // Pre-load every mode's samples under "<modeName>:<sensor>" so the demo
+    // can mix sounds from multiple modes simultaneously.
+    for (const [modeName, m] of modes) {
+      for (const [sensor, path] of m.paths) {
+        loadSample(`${modeName}:${sensor}`, path);
+      }
+    }
   }
 }
 
@@ -131,12 +154,15 @@ export function setMode(name: string): boolean {
     return false;
   }
   currentMode = mode;
-  for (const [sensor, ch] of channels) {
-    const path = mode.paths.get(sensor);
-    if (path && !ch.stdin.destroyed) {
-      ch.stdin.write(`load ${path}\n`);
+  if (isWindows) {
+    for (const [sensor, ch] of channels) {
+      const path = mode.paths.get(sensor);
+      if (path && !ch.stdin.destroyed) {
+        ch.stdin.write(`load ${path}\n`);
+      }
     }
   }
+  // Linux: nothing to load — every mode's samples are already in the mixer.
   console.log(`Mode: ${name}`);
   return true;
 }
@@ -159,8 +185,42 @@ export function cycleMode(): string | null {
 }
 
 export function playSound(sensor: number) {
-  const ch = channels.get(sensor);
-  if (ch && !ch.stdin.destroyed) {
-    ch.stdin.write("play\n");
+  if (isWindows) {
+    const ch = channels.get(sensor);
+    if (ch && !ch.stdin.destroyed) ch.stdin.write("play\n");
+  } else if (currentMode) {
+    playSample(`${currentMode.name}:${sensor}`);
   }
+}
+
+// Demo-only: play a specific mode's sample regardless of currentMode.
+export function playSoundFromMode(modeName: string, sensor: number) {
+  if (isWindows) return;
+  playSample(`${modeName}:${sensor}`);
+}
+
+// Demo-only: load and play a long pre-rendered audio track (e.g. a full
+// orchestrated MIDI render). Uses key prefix "demo:" so it can't collide.
+export function loadDemoTrack(name: string, wavPath: string) {
+  if (isWindows) return;
+  loadSample(`demo:${name}`, wavPath);
+}
+
+export function playDemoTrack(name: string) {
+  if (isWindows) return;
+  playSample(`demo:${name}`);
+}
+
+export function hasDemoTrack(name: string): boolean {
+  return !isWindows && hasSample(`demo:${name}`);
+}
+
+export function getDemoTrackMs(name: string): number {
+  return isWindows ? 0 : getSampleDurationMs(`demo:${name}`);
+}
+
+// Stop every voice currently mixing (used when the demo gets interrupted).
+export function stopAllPlayingSounds() {
+  if (isWindows) return;
+  stopAllVoices();
 }
