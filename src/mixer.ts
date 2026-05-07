@@ -27,6 +27,19 @@ const voices: Voice[] = [];
 
 type MixerProc = ChildProcess & { stdin: Writable; stderr: Readable };
 let proc: MixerProc | null = null;
+let heartbeat: NodeJS.Timeout | null = null;
+
+// Pool of pre-allocated Int16Array scratch buffers used by renderChunk(). At
+// peak, the writable stream queues a few chunks ahead of the kernel pipe;
+// pool size is comfortably larger than any in-flight count so we never wrap
+// onto a buffer Node still holds a reference to. Avoids a ~3.8 KB alloc on
+// every 10 ms tick (~100/s of GC churn).
+const SCRATCH_POOL_SIZE = 64;
+const scratchPool: Int16Array[] = Array.from(
+  { length: SCRATCH_POOL_SIZE },
+  () => new Int16Array(FRAMES_PER_CHUNK * CHANNELS),
+);
+let scratchIdx = 0;
 
 function parseWav(buf: Buffer): Int16Array {
   if (buf.toString("ascii", 0, 4) !== "RIFF") throw new Error("not a RIFF file");
@@ -52,6 +65,7 @@ let totalBytesWritten = 0;
 
 export function startMixer(): void {
   if (proc || shuttingDown) return;
+  if (heartbeat) { clearInterval(heartbeat); heartbeat = null; }
   console.log("[mixer] spawning pw-cat");
   const child = spawn(
     "pw-cat",
@@ -90,16 +104,18 @@ export function startMixer(): void {
   pump();
   // Heartbeat: if pw-cat ever wedges (no drain for a while), log it so we
   // can see in journalctl how often it's happening.
-  setInterval(() => {
+  heartbeat = setInterval(() => {
     if (!proc?.stdin) return;
     console.log(`[mixer] heartbeat: writableLength=${proc.stdin.writableLength}, totalBytes=${totalBytesWritten}, writesSince=${writesSinceLastDrain}`);
-  }, 60_000).unref();
+  }, 60_000);
+  heartbeat.unref();
 }
 
 // Stop the auto-respawn cycle. Call this from a process-exit handler so a
 // killed parent doesn't leave a zombie pw-cat respawning forever.
 export function markShuttingDown(): void {
   shuttingDown = true;
+  if (heartbeat) { clearInterval(heartbeat); heartbeat = null; }
   if (proc) {
     proc.removeAllListeners("exit");
     try { proc.stdin.end(); } catch {}
@@ -149,7 +165,8 @@ export function stopAllVoices(): void {
 }
 
 function renderChunk(): Buffer {
-  const out = new Int16Array(FRAMES_PER_CHUNK * CHANNELS);
+  const out = scratchPool[scratchIdx];
+  scratchIdx = (scratchIdx + 1) % SCRATCH_POOL_SIZE;
   for (let f = 0; f < FRAMES_PER_CHUNK; f++) {
     let l = 0;
     let r = 0;
@@ -205,6 +222,7 @@ export function restartMixer(): void {
 }
 
 export function shutdownMixer(): void {
+  if (heartbeat) { clearInterval(heartbeat); heartbeat = null; }
   if (proc) {
     proc.removeAllListeners("exit");
     proc.stdin.end();
